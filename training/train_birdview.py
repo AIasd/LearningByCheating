@@ -160,14 +160,14 @@ def train(config):
     data_train, data_val = load_data(**config['data_args'])
     criterion = LocationLoss(w=192, h=192, choice='l1')
     net = BirdViewPolicyModelSS(config['model_args']['backbone']).to(config['device'])
-    
+
     if config['resume']:
         log_dir = Path(config['log_dir'])
         checkpoints = list(log_dir.glob('model-*.th'))
         checkpoint = str(checkpoints[-1])
         print ("load %s"%checkpoint)
         net.load_state_dict(torch.load(checkpoint))
-    
+
     optim = torch.optim.Adam(net.parameters(), lr=config['optimizer_args']['lr'])
 
     for epoch in tqdm.tqdm(range(config['max_epoch']+1), desc='Epoch'):

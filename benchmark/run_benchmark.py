@@ -10,11 +10,15 @@ import bird_view.utils.carla_utils as cu
 
 from bird_view.models.common import crop_birdview
 
+import scipy.misc
+import datetime
+import re
+import os
 
 def _paint(observations, control, diagnostic, debug, env, show=False):
     import cv2
     import numpy as np
-        
+
 
     WHITE = (255, 255, 255)
     RED = (255, 0, 0)
@@ -39,21 +43,21 @@ def _paint(observations, control, diagnostic, debug, env, show=False):
 
             r1 = h / a.shape[0]
             r2 = h / b.shape[0]
-        
+
             a = cv2.resize(a, (int(r1 * a.shape[1]), int(r1 * a.shape[0])))
             b = cv2.resize(b, (int(r2 * b.shape[1]), int(r2 * b.shape[0])))
-    
+
             return np.concatenate([a, b], 1)
-            
+
         else:
             h = min(a.shape[1], b.shape[1])
-            
+
             r1 = h / a.shape[1]
             r2 = h / b.shape[1]
-        
+
             a = cv2.resize(a, (int(r1 * a.shape[1]), int(r1 * a.shape[0])))
             b = cv2.resize(b, (int(r2 * b.shape[1]), int(r2 * b.shape[0])))
-    
+
             return np.concatenate([a, b], 0)
 
     def _write(text, i, j, canvas=canvas, fontsize=0.4):
@@ -62,14 +66,14 @@ def _paint(observations, control, diagnostic, debug, env, show=False):
         cv2.putText(
                 canvas, text, (cols[j], rows[i]),
                 cv2.FONT_HERSHEY_SIMPLEX, fontsize, WHITE, 1)
-                
+
     _command = {
             1: 'LEFT',
             2: 'RIGHT',
             3: 'STRAIGHT',
             4: 'FOLLOW',
             }.get(observations['command'], '???')
-            
+
     if 'big_cam' in observations:
         fontsize = 0.8
     else:
@@ -103,18 +107,18 @@ def _paint(observations, control, diagnostic, debug, env, show=False):
 
         S = R // 2
         birdview[x-S:x+S+1,y-S:y+S+1] = RED
-    
+
     for x, y in debug.get('locations_birdview', []):
         S = R // 2
-        birdview[x-S:x+S+1,y-S:y+S+1] = RED       
- 
+        birdview[x-S:x+S+1,y-S:y+S+1] = RED
+
     for x, y in debug.get('locations_pixel', []):
         S = R // 2
         if 'big_cam' in observations:
             rgb[y-S:y+S+1,x-S:x+S+1] = RED
         else:
             canvas[y-S:y+S+1,x-S:x+S+1] = RED
-        
+
     for x, y in debug.get('curve', []):
         x = int(X - x * 4)
         y = int(Y + y * 4)
@@ -154,19 +158,44 @@ def _paint(observations, control, diagnostic, debug, env, show=False):
 
     if 'image' in debug:
         full = _stick_together(full, cu.visualize_predicted_birdview(debug['image'], 0.01))
-        
+
     if 'big_cam' in observations:
         full = _stick_together(canvas, full, axis=0)
-    
+
     if show:
         bzu.show_image('canvas', full)
     bzu.add_to_video(full)
 
 
-def run_single(env, weather, start, target, agent_maker, seed, autopilot, show=False):
+def run_single(env, weather, start, target, agent_maker, seed, autopilot, show=False, model_path=None, suite_name=None, n_vehicles=0, n_pedestrians=0):
+    # addition from agent.py
+    from skimage.io import imread
+    _road_map = imread('PythonAPI/agents/navigation/%s.png' % env._map.name)
+    WORLD_OFFSETS = {
+        'Town01' : (-52.059906005859375, -52.04995942115784),
+        'Town02' : (-57.459808349609375, 55.3907470703125)
+    }
+    PIXELS_PER_METER = 5
+    def _world_to_pixel(vehicle, location, offset=(0, 0)):
+        world_offset = WORLD_OFFSETS[env._map.name]
+        x = PIXELS_PER_METER * (location.x - world_offset[0])
+        y = PIXELS_PER_METER * (location.y - world_offset[1])
+        return [int(x - offset[0]), int(y - offset[1])]
+    def _is_point_on_sidewalk(vehicle, loc):
+        # Convert to pixel coordinate
+        pixel_x, pixel_y = _world_to_pixel(vehicle, loc)
+        pixel_y = np.clip(pixel_y, 0, _road_map.shape[0]-1)
+        pixel_x = np.clip(pixel_x, 0, _road_map.shape[1]-1)
+        point = _road_map[pixel_y, pixel_x, 0]
+
+        return point == 0
+
+    # ------------------------------------------------
     # HACK: deterministic vehicle spawns.
     env.seed = seed
-    env.init(start=start, target=target, weather=cu.PRESET_WEATHERS[weather])
+
+    # modifications
+    env.init(start=start, target=target, weather=cu.PRESET_WEATHERS[weather], n_vehicles=n_vehicles, n_pedestrians=n_pedestrians)
 
     if not autopilot:
         agent = agent_maker()
@@ -184,6 +213,33 @@ def run_single(env, weather, start, target, agent_maker, seed, autopilot, show=F
             'collided': None,
             }
 
+    # modifications
+    data_folder = 'collected_data'
+    if not os.path.exists(data_folder):
+        os.mkdir(data_folder)
+
+    trial_folder = data_folder+'/'+'0'
+    counter = 0
+    while os.path.exists(trial_folder):
+        counter += 1
+        trial_folder = data_folder+'/'+str(counter)
+    os.mkdir(trial_folder)
+
+    image_folder = trial_folder+'/'+'images'
+    if not os.path.exists(image_folder):
+        os.mkdir(image_folder)
+
+    logfile_path = trial_folder+'/'+'driving_log.csv'
+
+    with open(logfile_path, 'a+') as f_out:
+        f_out.write(','.join(['FrameId', 'center', 'steering', 'throttle', 'brake', 'speed', 'command', 'Self Driving Model','Suit Name', 'Weather', 'Crashed', 'Crashed Type', 'Tot Crashes', 'Tot Lights Ran', 'Tot Lights']))
+        f_out.write('\n')
+
+    total_lights = 0
+    total_lights_ran = 0
+    collided = False
+    total_crashes = 0
+    frame_id = 0
     while env.tick():
         observations = env.get_observations()
         control = agent.run_step(observations)
@@ -201,11 +257,73 @@ def run_single(env, weather, start, target, agent_maker, seed, autopilot, show=F
             result['collided'] = env.collided
             result['t'] = env._tick
             break
+        # additions
+        from agents.tools.misc import is_within_distance_ahead, compute_yaw_difference
+        total_lights = env.traffic_tracker.total_lights
+        total_lights_ran = env.traffic_tracker.total_lights_ran
+        collided = env.collided
 
+
+        _proximity_threshold = 1.5 # 9.5 for autopilot
+        actor_list = env._world.get_actors()
+        vehicle_list = actor_list.filter('*vehicle*')
+        # lights_list = actor_list.filter('*traffic_light*')
+        walkers_list = actor_list.filter('*walker*')
+
+
+        ego_vehicle_location = env._player.get_location()
+        ego_vehicle_orientation = env._player.get_transform().rotation.yaw
+        ego_vehicle_waypoint = env._map.get_waypoint(ego_vehicle_location)
+
+
+        # crash_type
+        crash_type = 'none'
+        if collided:
+            crash_type = 'other'
+            total_crashes += 1
+        for walker in walkers_list:
+            loc = walker.get_location()
+            dist = loc.distance(ego_vehicle_location)
+            degree = 162 / (np.clip(dist, 1.5, 10.5)+0.3)
+            if _is_point_on_sidewalk(env._player, loc):
+                continue
+
+            if is_within_distance_ahead(loc, ego_vehicle_location,
+                                        env._player.get_transform().rotation.yaw, _proximity_threshold, degree=degree):
+                crash_type = 'pedestrian'
+        for target_vehicle in vehicle_list:
+            # do not account for the ego vehicle
+            if target_vehicle.id == env._player.id:
+                continue
+
+            loc = target_vehicle.get_location()
+            ori = target_vehicle.get_transform().rotation.yaw
+
+            target_vehicle_waypoint = env._map.get_waypoint(target_vehicle.get_location())
+
+            if compute_yaw_difference(ego_vehicle_orientation, ori) <= 150 and is_within_distance_ahead(loc, ego_vehicle_location,
+                                        env._player.get_transform().rotation.yaw, _proximity_threshold, degree=45):
+                crash_type = 'vehicle'
+
+        with open(logfile_path, 'a+') as f_out:
+
+            dt = str(datetime.datetime.now())
+            m = re.search("(\d+)-(\d+)-(\d+) (\d+):(\d+):(\d+).\d+", dt).groups()
+            time_info = '_'.join(m)
+
+            center_address = image_folder+'/'+'center_'+str(frame_id)+'_'+time_info+'.jpg'
+            scipy.misc.toimage(observations['rgb'], cmin=0.0, cmax=...).save(center_address)
+
+
+            f_out.write(','.join([str(frame_id), center_address, str(control.steer), str(control.throttle), str(control.brake), str(diagnostic['speed']), str(observations['command']), str(model_path), suite_name, str(weather), str(collided), crash_type, str(total_crashes), str(total_lights_ran), str(total_lights)]))
+            f_out.write('\n')
+
+        frame_id += 1
+    # -------------------------------------------------------------
     return result, diagnostics
 
 
-def run_benchmark(agent_maker, env, benchmark_dir, seed, autopilot, resume, max_run=5, show=False):
+def run_benchmark(agent_maker, env, benchmark_dir, seed, autopilot, resume, max_run=5, show=False, model_path=None, suite_name=None):
     """
     benchmark_dir must be an instance of pathlib.Path
     """
@@ -221,8 +339,12 @@ def run_benchmark(agent_maker, env, benchmark_dir, seed, autopilot, resume, max_
     else:
         summary = pd.DataFrame()
 
-    num_run = 0
+    # modifications
+    n_vehicles = 50
+    n_pedestrians = 200
 
+    num_run = 0
+    print('+'*100, 'start to run benchmark', '+'*100)
     for weather, (start, target), run_name in tqdm.tqdm(env.all_tasks, total=total):
         if resume and len(summary) > 0 and ((summary['start'] == start) \
                        & (summary['target'] == target) \
@@ -235,7 +357,7 @@ def run_benchmark(agent_maker, env, benchmark_dir, seed, autopilot, resume, max_
 
         bzu.init_video(save_dir=str(benchmark_dir / 'videos'), save_path=run_name)
 
-        result, diagnostics = run_single(env, weather, start, target, agent_maker, seed, autopilot, show=show)
+        result, diagnostics = run_single(env, weather, start, target, agent_maker, seed, autopilot, show=show, model_path=model_path, suite_name=suite_name, n_vehicles=n_vehicles, n_pedestrians=n_pedestrians)
 
         summary = summary.append(result, ignore_index=True)
 

@@ -1,7 +1,6 @@
 import numpy as np
 import torch
-import torchvision.transforms as transforms
-
+from bird_view import torchvision_utils
 import carla
 
 
@@ -13,7 +12,7 @@ class Agent(object):
             print('Unused kwargs: %s' % kwargs)
 
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        self.transform = transforms.ToTensor()
+        self.transform = torchvision_utils.myToTensor()
 
         self.one_hot = torch.FloatTensor(torch.eye(4))
 

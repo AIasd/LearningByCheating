@@ -57,8 +57,8 @@ def run(model_path, port, suite, big_cam, seed, autopilot, resume, max_run=10, s
 
         with make_suite(suite_name, port=port, big_cam=big_cam) as env:
             agent_maker = _agent_factory_hack(model_path, config, autopilot)
-
-            run_benchmark(agent_maker, env, benchmark_dir, seed, autopilot, resume, max_run=max_run, show=show)
+            # modification
+            run_benchmark(agent_maker, env, benchmark_dir, seed, autopilot, resume, max_run=max_run, show=show, model_path=model_path, suite_name=suite_name)
 
         elapsed = time.time() - tick
         total_time += elapsed
@@ -81,5 +81,4 @@ if __name__ == '__main__':
     parser.add_argument('--max-run', type=int, default=3)
 
     args = parser.parse_args()
-
     run(Path(args.model_path), args.port, args.suite, args.big_cam, args.seed, args.autopilot, args.resume, max_run=args.max_run, show=args.show)

@@ -8,7 +8,7 @@ import numpy as np
 import cv2
 
 from torch.utils.data import Dataset, DataLoader
-from torchvision import transforms
+from bird_view import torchvision_utils
 from utils.image_utils import draw_msra_gaussian, gaussian_radius
 from utils.carla_utils import visualize_birdview
 
@@ -57,7 +57,7 @@ class BirdViewDataset(Dataset):
         self.file_map = {}
         self.idx_map = {}
 
-        self.bird_view_transform = transforms.ToTensor()
+        self.bird_view_transform = torchvision_utils.myToTensor()
 
         n_episodes = 0
 
@@ -173,27 +173,27 @@ class BirdViewDataset(Dataset):
 class BiasedBirdViewDataset(BirdViewDataset):
     def __init__(self, dataset_path, left_ratio=0.25, right_ratio=0.25, straight_ratio=0.25, **kwargs):
         super().__init__(dataset_path, **kwargs)
-        
+
         print ("Doing biased: %.2f,%.2f,%.2f"%(left_ratio, right_ratio, straight_ratio))
-        
+
         self._choices = [1,2,3,4]
         self._weights = [left_ratio,right_ratio,straight_ratio,1-left_ratio-right_ratio-straight_ratio]
         # Separately save data on different cmd
         self.cmd_map = { i : set([]) for i in range(1,5)}
-        
+
         for idx in range(len(self.file_map)):
             lmdb_txn = self.file_map[idx]
             index = self.idx_map[idx]
-            
+
             measurement = np.frombuffer(lmdb_txn.get(('measurements_%04d'%index).encode()), np.float32)
             ox, oy, oz, ori_ox, ori_oy, vx, vy, vz, ax, ay, az, cmd, steer, throttle, brake, manual, gear = measurement
             speed = np.linalg.norm([vx,vy,vz])
-            
+
             if cmd != 4 and speed > 1.0:
                 self.cmd_map[cmd].add(idx)
             else:
                 self.cmd_map[4].add(idx)
-            
+
         for cmd, nums in self.cmd_map.items():
             print (cmd, len(nums))
 

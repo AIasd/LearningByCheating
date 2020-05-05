@@ -5,7 +5,7 @@ from tensorboardX import SummaryWriter
 
 import numpy as np
 import torch
-import torchvision.utils as tv_utils
+from bird_view import torchvision_utils
 
 
 def _preprocess_image(x):
@@ -20,7 +20,7 @@ def _preprocess_image(x):
                 x = x.unsqueeze(1)
 
         # x = torch.nn.functional.interpolate(x, 128, mode='nearest')
-        x = tv_utils.make_grid(x, padding=16, normalize=True, nrow=4)
+        x = torchvision_utils.make_grid(x, padding=16, normalize=True, nrow=4)
         x = x.cpu().numpy()
 
     return x

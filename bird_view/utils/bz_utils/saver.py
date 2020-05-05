@@ -9,7 +9,7 @@ from tensorboardX import SummaryWriter
 
 import numpy as np
 import torch
-import torchvision.utils as tv_utils
+from bird_view import torchvision_utils
 
 
 def _preprocess_image(x):
@@ -30,7 +30,7 @@ def _preprocess_image(x):
         x = x.unsqueeze(1)
 
     # x = torch.nn.functional.interpolate(x, 128, mode='nearest')
-    x = tv_utils.make_grid(x, padding=2, normalize=True, nrow=4)
+    x = torchvision_utils.make_grid(x, padding=2, normalize=True, nrow=4)
     x = x.cpu().numpy()
 
     return x
@@ -72,10 +72,10 @@ class Experiment(object):
         # Functions.
         self.debug = self._log.debug
         self.info = lambda **kwargs: self._log.info(_format(**kwargs))
-        
+
     def load_config(self, model_path):
         log_dir = Path(model_path).parent
-        
+
         with open(str(log_dir / 'config.json'), 'r') as f:
             return json.load(f)
 
