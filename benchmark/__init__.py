@@ -5,7 +5,9 @@ VERSION = '096'
 
 WEATHER_1 = [1, 3, 6, 8]
 WEATHER_2 = [4, 14]
-WEATHER_3 = [10, 14]
+# WEATHER_3 = [10, 14]
+# modification
+WEATHER_3 = [13]
 WEATHER_4 = [1, 8, 14]
 
 _suites = dict()
@@ -192,12 +194,16 @@ _aliases = {
         'dense-np': [
             'NoCrashTown01-v5-np', 'NoCrashTown01-v6-np',
             'NoCrashTown02-v5-np', 'NoCrashTown02-v6-np',
-            ]
+            ],
+        # modification
+        # 'no-crash': ['NoCrashTown02-v6', 'NoCrashTown01-v6', 'NoCrashTown02-v4', 'NoCrashTown01-v4', 'NoCrashTown02-v2', 'NoCrashTown01-v2']
+        'no-crash': ['NoCrashTown02-v6']
         }
 
 _aliases['all'] = _aliases['town1'] + _aliases['town2']
 
 ALL_SUITES = list(_suites.keys()) + list(_aliases.keys())
+
 
 
 def make_suite(suite_name, port=2000, big_cam=False, planner='new', client=None):

@@ -50,6 +50,7 @@ def run(model_path, port, suite, big_cam, seed, autopilot, resume, max_run=10, s
     total_time = 0.0
 
     for suite_name in get_suites(suite):
+        print('-'*200+'\n'+suite_name+' starts'+'\n'+'-'*200)
         tick = time.time()
 
         benchmark_dir = log_dir / 'benchmark' / model_path.stem / ('%s_seed%d' % (suite_name, seed))
@@ -72,13 +73,16 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--model-path', required=True)
     parser.add_argument('--port', type=int, default=2000)
-    parser.add_argument('--suite', choices=ALL_SUITES, default='town1')
+    # modification
+    parser.add_argument('--suite', choices=ALL_SUITES, default='no-crash')
     parser.add_argument('--big_cam', action='store_true')
-    parser.add_argument('--seed', type=int, default=2019)
+    # modification
+    parser.add_argument('--seed', type=int, default=2)
     parser.add_argument('--autopilot', action='store_true', default=False)
     parser.add_argument('--show', action='store_true', default=False)
     parser.add_argument('--resume', action='store_true')
-    parser.add_argument('--max-run', type=int, default=3)
+    # modification
+    parser.add_argument('--max-run', type=int, default=100)
 
     args = parser.parse_args()
     run(Path(args.model_path), args.port, args.suite, args.big_cam, args.seed, args.autopilot, args.resume, max_run=args.max_run, show=args.show)

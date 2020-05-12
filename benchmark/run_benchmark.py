@@ -7,6 +7,9 @@ import time
 
 import bird_view.utils.bz_utils as bzu
 import bird_view.utils.carla_utils as cu
+import carla
+
+from carla import LaneType
 
 from bird_view.models.common import crop_birdview
 
@@ -167,7 +170,7 @@ def _paint(observations, control, diagnostic, debug, env, show=False):
     bzu.add_to_video(full)
 
 
-def run_single(env, weather, start, target, agent_maker, seed, autopilot, show=False, model_path=None, suite_name=None, n_vehicles=0, n_pedestrians=0):
+def run_single(env, weather, start, target, agent_maker, seed, autopilot, show=False, model_path=None, suite_name=None):
     # addition from agent.py
     from skimage.io import imread
     _road_map = imread('PythonAPI/agents/navigation/%s.png' % env._map.name)
@@ -195,7 +198,7 @@ def run_single(env, weather, start, target, agent_maker, seed, autopilot, show=F
     env.seed = seed
 
     # modifications
-    env.init(start=start, target=target, weather=cu.PRESET_WEATHERS[weather], n_vehicles=n_vehicles, n_pedestrians=n_pedestrians)
+    env.init(start=start, target=target, weather=cu.PRESET_WEATHERS[weather])
 
     if not autopilot:
         agent = agent_maker()
@@ -214,7 +217,10 @@ def run_single(env, weather, start, target, agent_maker, seed, autopilot, show=F
             }
 
     # modifications
-    data_folder = 'collected_data'
+    all_data_folder = 'collected_data'
+    if not os.path.exists(all_data_folder):
+        os.mkdir(all_data_folder)
+    data_folder = all_data_folder+'/'+suite_name
     if not os.path.exists(data_folder):
         os.mkdir(data_folder)
 
@@ -229,18 +235,28 @@ def run_single(env, weather, start, target, agent_maker, seed, autopilot, show=F
     if not os.path.exists(image_folder):
         os.mkdir(image_folder)
 
+    all_misbehavior_logfile_path = data_folder+'/'+'all_misbehavior_driving_log.csv'
+
     logfile_path = trial_folder+'/'+'driving_log.csv'
+    misbehavior_logfile_path = trial_folder+'/'+'misbehavior_driving_log.csv'
+
+
+    title = ','.join(['FrameId', 'center', 'steering', 'throttle', 'brake', 'speed', 'command', 'Self Driving Model','Suit Name', 'Weather', 'Crashed', 'Crashed Type', 'Tot Crashes', 'Tot Lights Ran', 'Tot Lights', 'dist_ped', 'dist_vehicle', 'offroad', 'road_type', 'status'])
 
     with open(logfile_path, 'a+') as f_out:
-        f_out.write(','.join(['FrameId', 'center', 'steering', 'throttle', 'brake', 'speed', 'command', 'Self Driving Model','Suit Name', 'Weather', 'Crashed', 'Crashed Type', 'Tot Crashes', 'Tot Lights Ran', 'Tot Lights']))
-        f_out.write('\n')
+        f_out.write(title+'\n')
+    with open(misbehavior_logfile_path, 'a+') as f_out:
+        f_out.write(title+','+'problem_type'+'\n')
+    with open(all_misbehavior_logfile_path, 'a+') as f_out:
+        f_out.write('counter'+','+title+','+'problem_type'+'\n')
 
     total_lights = 0
     total_lights_ran = 0
     collided = False
     total_crashes = 0
     frame_id = 0
-    while env.tick():
+    LAST_ROUND = False
+    while env.tick() and not LAST_ROUND:
         observations = env.get_observations()
         control = agent.run_step(observations)
         diagnostic = env.apply_control(control)
@@ -250,13 +266,20 @@ def run_single(env, weather, start, target, agent_maker, seed, autopilot, show=F
         diagnostic.pop('viz_img')
         diagnostics.append(diagnostic)
 
+        # modification
+        status = 'progress'
         if env.is_failure() or env.is_success():
             result['success'] = env.is_success()
             result['total_lights_ran'] = env.traffic_tracker.total_lights_ran
             result['total_lights'] = env.traffic_tracker.total_lights
             result['collided'] = env.collided
             result['t'] = env._tick
-            break
+            LAST_ROUND = True
+            if env.is_failure():
+                status = 'failure'
+            elif env.is_success():
+                status = 'success'
+
         # additions
         from agents.tools.misc import is_within_distance_ahead, compute_yaw_difference
         total_lights = env.traffic_tracker.total_lights
@@ -264,7 +287,8 @@ def run_single(env, weather, start, target, agent_maker, seed, autopilot, show=F
         collided = env.collided
 
 
-        _proximity_threshold = 1.5 # 9.5 for autopilot
+        _proximity_threshold_vehicle = 5.5 # 9.5 for autopilot to avoid crash
+        _proximity_threshold_ped = 2.5 # 9.5 for autopilot to avoid crash
         actor_list = env._world.get_actors()
         vehicle_list = actor_list.filter('*vehicle*')
         # lights_list = actor_list.filter('*traffic_light*')
@@ -273,24 +297,41 @@ def run_single(env, weather, start, target, agent_maker, seed, autopilot, show=F
 
         ego_vehicle_location = env._player.get_location()
         ego_vehicle_orientation = env._player.get_transform().rotation.yaw
-        ego_vehicle_waypoint = env._map.get_waypoint(ego_vehicle_location)
+        ego_vehicle_waypoint = env._map.get_waypoint(ego_vehicle_location, project_to_road=False, lane_type=LaneType.Any)
 
+
+        offroad = False
+        if not ego_vehicle_waypoint:
+            print('-'*100, 'no lane', '-'*100)
+            offroad = True
+        elif ego_vehicle_waypoint.lane_type != LaneType.Driving:
+            print('-'*100, ego_vehicle_waypoint.lane_type, '-'*100)
+            offroad = True
+
+
+
+        dist_ped = 10000
+        dist_vehicle = 10000
 
         # crash_type
         crash_type = 'none'
         if collided:
             crash_type = 'other'
             total_crashes += 1
+
         for walker in walkers_list:
             loc = walker.get_location()
-            dist = loc.distance(ego_vehicle_location)
-            degree = 162 / (np.clip(dist, 1.5, 10.5)+0.3)
+            cur_dist_ped = loc.distance(ego_vehicle_location)
+            degree = 162 / (np.clip(dist_ped, 1.5, 10.5)+0.3)
             if _is_point_on_sidewalk(env._player, loc):
                 continue
 
             if is_within_distance_ahead(loc, ego_vehicle_location,
-                                        env._player.get_transform().rotation.yaw, _proximity_threshold, degree=degree):
+                                        env._player.get_transform().rotation.yaw, _proximity_threshold_vehicle, degree=cur_dist_ped):
                 crash_type = 'pedestrian'
+            if dist_ped > cur_dist_ped:
+                dist_ped = cur_dist_ped
+
         for target_vehicle in vehicle_list:
             # do not account for the ego vehicle
             if target_vehicle.id == env._player.id:
@@ -302,23 +343,48 @@ def run_single(env, weather, start, target, agent_maker, seed, autopilot, show=F
             target_vehicle_waypoint = env._map.get_waypoint(target_vehicle.get_location())
 
             if compute_yaw_difference(ego_vehicle_orientation, ori) <= 150 and is_within_distance_ahead(loc, ego_vehicle_location,
-                                        env._player.get_transform().rotation.yaw, _proximity_threshold, degree=45):
+                                        env._player.get_transform().rotation.yaw, _proximity_threshold_vehicle, degree=45):
                 crash_type = 'vehicle'
+            cur_dist_vehicle = np.linalg.norm(np.array([
+                loc.x - ego_vehicle_location.x,
+                loc.y - ego_vehicle_location.y]))
+            if dist_vehicle > cur_dist_vehicle:
+                dist_vehicle = cur_dist_vehicle
 
+        prev_total_lights_ran = 0
         with open(logfile_path, 'a+') as f_out:
-
             dt = str(datetime.datetime.now())
-            m = re.search("(\d+)-(\d+)-(\d+) (\d+):(\d+):(\d+).\d+", dt).groups()
-            time_info = '_'.join(m)
+            m = re.search("(\d+)-(\d+)-(\d+) (\d+):(\d+):(\d+).\d+", dt)
+            if m:
+                time_info = '_'.join(m.groups())
+            else:
+                time_info = ''
+
 
             center_address = image_folder+'/'+'center_'+str(frame_id)+'_'+time_info+'.jpg'
             scipy.misc.toimage(observations['rgb'], cmin=0.0, cmax=...).save(center_address)
 
+            log_text = ','.join([str(frame_id), center_address, str(control.steer), str(control.throttle), str(control.brake), str(diagnostic['speed']), str(observations['command']), str(model_path), suite_name, str(weather), str(collided), crash_type, str(total_crashes), str(total_lights_ran), str(total_lights), str(dist_ped), str(dist_vehicle), str(offroad), str(ego_vehicle_waypoint.lane_type), status])
 
-            f_out.write(','.join([str(frame_id), center_address, str(control.steer), str(control.throttle), str(control.brake), str(diagnostic['speed']), str(observations['command']), str(model_path), suite_name, str(weather), str(collided), crash_type, str(total_crashes), str(total_lights_ran), str(total_lights)]))
-            f_out.write('\n')
+            f_out.write(log_text+'\n')
+
+
+        if collided or offroad or total_lights_ran > prev_total_lights_ran:
+            if collided:
+                problem_type = 'collision'
+            elif offroad:
+                problem_type = 'offroad'
+            elif total_lights_ran > prev_total_lights_ran:
+                problem_type = 'light_ran'
+            with open(misbehavior_logfile_path, 'a+') as f_out:
+                f_out.write(log_text+','+problem_type+'\n')
+            with open(all_misbehavior_logfile_path, 'a+') as f_out:
+                f_out.write(str(counter)+','+log_text+','+problem_type+'\n')
 
         frame_id += 1
+        prev_total_lights_ran = total_lights_ran
+    if env.is_failure():
+        print('+'*100, 'collision:', str(result['collided']), '+'*100)
     # -------------------------------------------------------------
     return result, diagnostics
 
@@ -339,13 +405,14 @@ def run_benchmark(agent_maker, env, benchmark_dir, seed, autopilot, resume, max_
     else:
         summary = pd.DataFrame()
 
-    # modifications
-    n_vehicles = 50
-    n_pedestrians = 200
+
 
     num_run = 0
-    print('+'*100, 'start to run benchmark', '+'*100)
+
     for weather, (start, target), run_name in tqdm.tqdm(env.all_tasks, total=total):
+        print('+'*200)
+        print(weather, start, target)
+        print('+'*200)
         if resume and len(summary) > 0 and ((summary['start'] == start) \
                        & (summary['target'] == target) \
                        & (summary['weather'] == weather)).any():
@@ -357,7 +424,7 @@ def run_benchmark(agent_maker, env, benchmark_dir, seed, autopilot, resume, max_
 
         bzu.init_video(save_dir=str(benchmark_dir / 'videos'), save_path=run_name)
 
-        result, diagnostics = run_single(env, weather, start, target, agent_maker, seed, autopilot, show=show, model_path=model_path, suite_name=suite_name, n_vehicles=n_vehicles, n_pedestrians=n_pedestrians)
+        result, diagnostics = run_single(env, weather, start, target, agent_maker, seed, autopilot, show=show, model_path=model_path, suite_name=suite_name)
 
         summary = summary.append(result, ignore_index=True)
 
